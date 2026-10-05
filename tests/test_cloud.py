@@ -14,31 +14,49 @@ SESSION = 'https://claude.ai/code/session_01KT8urKHBAjfZSV8YgvbbWz'
 class Launch(unittest.TestCase):
     def test_demonstrated_output_and_exact_arguments(self):
         result = subprocess.CompletedProcess([], 0, 'Created cloud session: sparkle pull request 1490\nView: '+SESSION+'?from=cli&m=0\nResume with: claude --teleport session_01KT8urKHBAjfZSV8YgvbbWz\n', 'Permission allow rule warning\n')
-        with patch.object(c, 'run', return_value=result) as run:
+        with patch.object(c, 'run_terminal', return_value=result) as run:
             self.assertEqual(c.launch(Path('/existing repo'), PR), ('success', SESSION, None))
-            run.assert_called_once_with(['claude', '--cloud', 'Review '+PR], cwd=Path('/existing repo'), timeout=120)
+            run.assert_called_once_with(['claude', '--cloud', 'Review '+PR], cwd=Path('/existing repo'), timeout=120, stop_when=c.creation_announced)
 
     def test_timeout_without_url_is_uncertain(self):
-        with patch.object(c, 'run', side_effect=subprocess.TimeoutExpired([], 120)):
+        with patch.object(c, 'run_terminal', side_effect=subprocess.TimeoutExpired([], 120)):
             self.assertEqual(c.launch('/tmp', PR)[0], 'uncertain')
 
     def test_timeout_with_url_saves_success(self):
-        with patch.object(c, 'run', side_effect=subprocess.TimeoutExpired([], 120, output=('View: '+SESSION+'\n').encode())):
+        with patch.object(c, 'run_terminal', side_effect=subprocess.TimeoutExpired([], 120, output=('View: '+SESSION+'\n').encode())):
             self.assertEqual(c.launch('/tmp', PR)[:2], ('success', SESSION))
 
     def test_nonzero_exit_with_url_saves_success(self):
-        with patch.object(c, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'View: '+SESSION)):
+        with patch.object(c, 'run_terminal', return_value=subprocess.CompletedProcess([], 1, '', 'View: '+SESSION)):
             self.assertEqual(c.launch('/tmp', PR)[:2], ('success', SESSION))
 
     def test_missing_executable_retryable(self):
-        with patch.object(c, 'run', side_effect=FileNotFoundError):
+        with patch.object(c, 'run_terminal', side_effect=FileNotFoundError):
             self.assertEqual(c.launch('/tmp', PR)[0], 'failed')
 
     def test_missing_url_never_retried(self):
         for code in (0, 1):
-            with patch.object(c, 'run', return_value=subprocess.CompletedProcess([], code, '', 'error')) as run:
+            with patch.object(c, 'run_terminal', return_value=subprocess.CompletedProcess([], code, '', 'error')) as run:
                 self.assertEqual(c.launch('/tmp', PR)[0], 'uncertain')
                 run.assert_called_once()
+
+    def test_failed_launch_preserves_error_without_retry(self):
+        result = subprocess.CompletedProcess([], 1, '', 'Warning: something\nError: branch is unavailable\n')
+        with patch.object(c, 'run_terminal', return_value=result) as run:
+            status, url, detail = c.launch('/tmp', PR)
+        self.assertEqual(status, 'uncertain')
+        self.assertIsNone(url)
+        self.assertIn('Error: branch is unavailable', detail)
+        run.assert_called_once()
+
+    def test_failure_diagnostics_are_bounded_and_redacted(self):
+        text = '\x1b[31mError: auth sk-ant-test-secret Bearer private-secret\x1b[0m\n' + ('x' * 1000 + '\n') * 100
+        output = c.diagnostics(text)
+        self.assertIn('Error: auth', output)
+        self.assertNotIn('private-secret', output)
+        self.assertNotIn('sk-ant-test-secret', output)
+        self.assertNotIn('\x1b', output)
+        self.assertLessEqual(len(output), 4000)
 
     def test_session_urls_and_ambiguity(self):
         self.assertEqual(c.session_url('\x1b[32mView: '+SESSION+'\x1b[0m'), SESSION)

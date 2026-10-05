@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shlex
 import tempfile
+from .terminal import run_terminal
 import sqlite3
 import subprocess
 import sys
@@ -158,10 +159,29 @@ def session_url(output):
     return matches[0] if len(matches) == 1 else None
 
 
+def creation_announced(output):
+    # A complete View line avoids mistaking a partially read ID for a URL.
+    clean = ANSI.sub('', output).replace('\r\n', '\n')
+    return any(session_url(line) for line in re.findall(r'^View: ([^\r\n]*)[\r\n]', clean, re.M))
+
+
+def diagnostics(output):
+    """Keep bounded, readable failure context; never retain raw terminal output."""
+    text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', output)
+    text = ANSI.sub('', text)
+    text = re.sub(r'sk-ant-[A-Za-z0-9_-]+', '[redacted]', text)
+    text = re.sub(r'(?i)(Bearer\s+)\S+', r'\1[redacted]', text)
+    text = ''.join(ch for ch in text if ch in '\n\t' or ord(ch) >= 32)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    errors = [line for line in lines if re.search(r'\b(error|failed|failure)\b', line, re.I)]
+    selected = errors[-6:] + [line for line in lines[-8:] if line not in errors[-6:]]
+    return '\n'.join(line[:800] for line in selected)[:4000]
+
+
 def launch(path, pr):
     """Invoke the demonstrated CLI command once, with no shell or branch edits."""
     try:
-        result = run(['claude', '--cloud', f'Review {pr}'], cwd=path, timeout=120)
+        result = run_terminal(['claude', '--cloud', f'Review {pr}'], cwd=path, timeout=120, stop_when=creation_announced)
         output = result.stdout + '\n' + result.stderr
         detail = f'CLI exited {result.returncode} without a unique session URL'
     except subprocess.TimeoutExpired as e:
@@ -171,8 +191,16 @@ def launch(path, pr):
         detail = 'CLI timed out; creation may have succeeded'
     except OSError:
         return 'failed', None, 'could not start Claude; check it is installed and on PATH'
+    except subprocess.SubprocessError:
+        return 'uncertain', None, 'terminal capture failed; creation may have succeeded'
     url = session_url(output)
-    return ('success', url, None) if url else ('uncertain', None, detail)
+    if url:
+        return 'success', url, None
+    context = diagnostics(output)
+    if context:
+        detail += '\n  Claude output:\n    ' + context.replace('\n', '\n    ')
+    rejected = 'Error: --cloud requires an interactive terminal.' in ANSI.sub('', output)
+    return ('failed' if rejected else 'uncertain'), None, detail
 
 
 def open_session(url):
@@ -189,8 +217,11 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
     failures = 0
     for pr in prs:
         records = history.records(pr)
-        if any(r['status'] in ('pending', 'uncertain') for r in records):
+        uncertain = next((r for r in records if r['status'] in ('pending', 'uncertain')), None)
+        if uncertain:
             print(f'UNCERTAIN {pr} — check claude.ai/code, then use --resolve; --force does not override this')
+            if uncertain['detail']:
+                print('  Previous attempt: ' + uncertain['detail'])
             failures += 1
             continue
         success = next((r for r in records if r['status'] == 'success'), None)
@@ -210,6 +241,7 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
             failures += 1
             continue
         id = history.start(pr)  # Commit before any cloud side effect, survives interruption.
+        print(f'LAUNCH {pr} — waiting for Claude (up to 120 seconds)…', flush=True)
         status, url, detail = launch(path, pr)
         history.finish(id, status, url, detail)
         if status == 'success':

@@ -13,7 +13,7 @@ The command extracts PRs, finds the matching existing checkout under `~/fossa`, 
 
 ## Install
 
-Requires macOS, Python 3.10+, Git, and an installed Claude Code CLI supporting `--cloud`. The command is already installed on this machine at `~/.local/bin/review-prs`.
+Requires macOS, Python 3.10+, Git, and an installed Claude Code CLI supporting `--cloud`. The command is already installed on this machine at `~/bin/review-prs`.
 
 For a fresh installation:
 
@@ -21,9 +21,9 @@ For a fresh installation:
 cd ~/projects/pr-launcher
 python3 -m venv .venv
 .venv/bin/python -m pip install .
-mkdir -p ~/.local/bin
-ln -s "$PWD/.venv/bin/review-prs" ~/.local/bin/review-prs
-export PATH="$HOME/.local/bin:$PATH"
+mkdir -p ~/bin
+ln -s "$PWD/.venv/bin/review-prs" ~/bin/review-prs
+export PATH="$HOME/bin:$PATH"
 ```
 
 Skip the symlink step if it already exists. Add the PATH line to `~/.zshrc` if needed. After edits, reinstall with `.venv/bin/python -m pip install .`. There are no third-party Python runtime dependencies.
@@ -99,7 +99,7 @@ The four-PR example yields sparkle 1474, 1486, 1490 and 1499; repeating 1490 wit
 
 History is stored outside this project in `~/Library/Application Support/review-prs/history.sqlite3`. Each attempt retains the canonical PR URL, UTC timestamp, status and returned session URL. Successful PRs print `SKIP` and the existing session link by default. A process lock prevents overlapping invocations.
 
-A durable pending record is committed before invoking Claude; successes are committed individually. Failed validation or failure to start the CLI can be retried after fixing the cause. Timeouts, interruption, unrecognized output, and CLI exits without a unique session URL are uncertain and block automatic retries—even with `--force`. A captured session URL confirms creation even if the CLI subsequently exits unsuccessfully or times out. It does not confirm review completion.
+A durable pending record is committed before invoking Claude; successes are committed individually. Failed validation or failure to start the CLI can be retried after fixing the cause. Timeouts, interruption, unrecognized output, and CLI exits without a unique session URL are uncertain and block automatic retries—even with `--force`. Failures show a bounded excerpt of Claude’s output, with common bearer/API tokens redacted, and save that excerpt in history. Later invocations display the saved error without retrying. Older attempts cannot recover output that was discarded by previous versions. A captured session URL confirms creation even if the CLI subsequently exits unsuccessfully or times out. It does not confirm review completion.
 
 Check claude.ai/code first. If an uncertain attempt created a session:
 
@@ -115,7 +115,7 @@ review-prs --resolve https://github.com/fossas/sparkle/pull/1490 --not-created
 review-prs
 ```
 
-The CLI is invoked once per attempt with closed stdin, captured output and a 120-second timeout. There are no automatic retries. History survives backend changes but cannot detect sessions created manually or on other computers. **Your manually launched PR 1490 session is not automatically in this history.** Do not include that PR in a live batch unless you want another review.
+The launcher prints `LAUNCH` immediately and returns as soon as Claude emits a complete `View:` session-link line, stopping the local CLI without waiting for the cloud review to finish. The CLI is invoked once per attempt inside a pseudo-terminal with captured output and a 120-second timeout. All three standard descriptors are terminals, as required by `--cloud`; the launcher does not type answers to interactive prompts. Local CLI processes are stopped on timeout or interruption. There are no automatic retries. History survives backend changes but cannot detect sessions created manually or on other computers. **Your manually launched PR 1490 session is not automatically in this history.** Do not include that PR in a live batch unless you want another review.
 
 ## Development checks
 
