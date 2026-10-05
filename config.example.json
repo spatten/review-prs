@@ -1,0 +1,6 @@
+{
+  "repositories": {
+    "fossas/sparkle": "~/fossa/sparkle",
+    "fossas/fossa-action": "~/fossa/fossa-action"
+  }
+}
