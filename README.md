@@ -7,7 +7,7 @@ review-prs --dry-run
 review-prs
 ```
 
-The command extracts PRs, finds the matching existing checkout under `~/fossa`, and runs `claude --cloud "Review <canonical PR URL>"` from that directory. It records and prints the created cloud session's URL.
+The command extracts PRs, finds the matching existing checkout under `~/fossa`, and runs `claude --cloud "Review <canonical PR URL>. …"` from that directory. It records and prints the created cloud session's URL.
 
 **No extra clones, branch switching, routines, API tokens, browser automation, or extensions.** It uses your existing Claude CLI account. Both `~/fossa/sparkle` and `~/fossa/fossa-action` work automatically when their `origin` matches the PR repository.
 
@@ -81,7 +81,7 @@ The launcher uses the existing checkout's **current branch**, including a featur
 
 Claude's normal cloud path clones the GitHub remote at that branch. If the Claude GitHub App is absent, Claude may instead bundle local repository data, including tracked uncommitted changes. This is the same behavior as invoking `claude --cloud` yourself. A local-only branch or detached HEAD may not work through every cloud launch path. See [Claude's cloud launch documentation](https://code.claude.com/docs/en/claude-code-on-the-web#from-terminal-to-cloud).
 
-The exact prompt is `Review <URL>`. The launcher does not separately publish comments, submit GitHub reviews, or modify PRs. The cloud agent still follows its own permissions, skills and repository instructions; this tool does not restrict the cloud agent's actions. Local Claude permission-rule warnings do not prevent recording a returned session URL.
+The exact prompt is `Review <URL>. Report your findings only in this session. Never post comments or reviews to the PR, and do not offer to post them.` The launcher does not separately publish comments, submit GitHub reviews, or modify PRs. The cloud agent still follows its own permissions, skills and repository instructions; this tool does not restrict the cloud agent's actions. Local Claude permission-rule warnings do not prevent recording a returned session URL.
 
 Model, effort and environment are left to Claude's defaults/settings. The tool exposes no overrides because reliable propagation through this launch interface has not been established. No extra cloud messages are sent.
 

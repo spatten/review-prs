@@ -16,7 +16,7 @@ class Launch(unittest.TestCase):
         result = subprocess.CompletedProcess([], 0, 'Created cloud session: sparkle pull request 1490\nView: '+SESSION+'?from=cli&m=0\nResume with: claude --teleport session_01KT8urKHBAjfZSV8YgvbbWz\n', 'Permission allow rule warning\n')
         with patch.object(c, 'run_terminal', return_value=result) as run:
             self.assertEqual(c.launch(Path('/existing repo'), PR), ('success', SESSION, None))
-            run.assert_called_once_with(['claude', '--cloud', 'Review '+PR], cwd=Path('/existing repo'), timeout=120, stop_when=c.creation_announced)
+            run.assert_called_once_with(['claude', '--cloud', c.prompt(PR)], cwd=Path('/existing repo'), timeout=120, stop_when=c.creation_announced)
 
     def test_timeout_without_url_is_uncertain(self):
         with patch.object(c, 'run_terminal', side_effect=subprocess.TimeoutExpired([], 120)):

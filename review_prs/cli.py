@@ -180,10 +180,15 @@ def diagnostics(output):
     return '\n'.join(line[:800] for line in selected)[:4000]
 
 
+def prompt(pr):
+    return (f'Review {pr}. Report your findings only in this session. '
+            'Never post comments or reviews to the PR, and do not offer to post them.')
+
+
 def launch(path, pr):
     """Invoke the demonstrated CLI command once, with no shell or branch edits."""
     try:
-        result = run_terminal(['claude', '--cloud', f'Review {pr}'], cwd=path, timeout=120, stop_when=creation_announced)
+        result = run_terminal(['claude', '--cloud', prompt(pr)], cwd=path, timeout=120, stop_when=creation_announced)
         output = result.stdout + '\n' + result.stderr
         detail = f'CLI exited {result.returncode} without a unique session URL'
     except subprocess.TimeoutExpired as e:
@@ -236,7 +241,7 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
         try:
             path, branch = validate(repo, repos.get(repo))
             if dry:
-                print(f'DRY {pr}\n  {repo} → {path} [{branch}]\n  {shlex.join(["claude", "--cloud", "Review " + pr])}')
+                print(f'DRY {pr}\n  {repo} → {path} [{branch}]\n  {shlex.join(["claude", "--cloud", prompt(pr)])}')
                 continue
         except (Error, OSError, ValueError, subprocess.SubprocessError) as e:
             print(f'FAIL {pr} — {e}')
