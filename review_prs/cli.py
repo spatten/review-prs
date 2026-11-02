@@ -90,8 +90,10 @@ def validate(repo, entry=None):
     path = Path(entry).expanduser().resolve() if entry is not None else (CHECKOUTS / repo.split('/')[1]).resolve()
     if not path.is_dir():
         raise Error(f'no checkout at {path}; use: review-prs --configure {repo} --checkout <path>')
-    if Path(git(path, 'rev-parse', '--show-toplevel')).resolve() != path:
+    root = Path(git(path, 'rev-parse', '--show-toplevel')).resolve()
+    if not root.samefile(path):
         raise Error('mapping must point to the root of a Git checkout')
+    path = root
     origin = git(path, 'remote', 'get-url', 'origin')
     remote = re.fullmatch(r'(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+?)(?:\.git)?/?', origin, re.I)
     if not remote or remote[1].lower() != repo:

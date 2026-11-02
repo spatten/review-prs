@@ -89,6 +89,19 @@ class Checkout(unittest.TestCase):
         self.assertEqual(self.git('branch', '--show-current'), 'feature')
         self.assertEqual((self.repo / 'work.txt').read_text(), 'uncommitted work')
 
+    def test_case_insensitive_checkout_path(self):
+        alias = self.root / 'SPARKLE'
+        if not alias.exists():
+            self.skipTest('requires a case-insensitive filesystem')
+        self.assertTrue(alias.samefile(self.repo))
+        self.assertEqual(c.validate('fossas/sparkle', str(alias)), (self.repo, 'feature'))
+
+    def test_subdirectory_is_not_checkout_root(self):
+        child = self.repo / 'nested'
+        child.mkdir()
+        with self.assertRaisesRegex(c.Error, 'root of a Git checkout'):
+            c.validate('fossas/sparkle', str(child))
+
     def test_wrong_owner_not_accepted_by_folder_name(self):
         with patch.object(c, 'CHECKOUTS', self.root), self.assertRaisesRegex(c.Error, 'origin does not match'):
             c.validate('other/sparkle')
