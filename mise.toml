@@ -1,0 +1,15 @@
+[tasks.build]
+description = "Create .venv, install review-prs into it (editable), and link ~/bin/review-prs"
+run = '''
+set -euo pipefail
+# A venv's scripts hard-code its absolute path, so a venv left over from before
+# the directory was moved or renamed is broken. Recreate it in that case.
+if ! head -1 .venv/bin/pip 2>/dev/null | grep -qF "#!$PWD/.venv/"; then
+  rm -rf .venv
+  python3 -m venv .venv
+fi
+.venv/bin/python -m pip install --quiet -e .
+mkdir -p ~/bin
+ln -sfn "$PWD/.venv/bin/review-prs" ~/bin/review-prs
+echo "Installed: ~/bin/review-prs -> $PWD/.venv/bin/review-prs"
+'''

@@ -15,18 +15,15 @@ The command extracts PRs, finds the matching existing checkout under `~/fossa`, 
 
 Requires macOS, Python 3.10+, Git, and an installed Claude Code CLI supporting `--cloud`. The command is already installed on this machine at `~/bin/review-prs`.
 
-For a fresh installation:
+To install, or to repair the install after moving or renaming this directory:
 
 ```sh
-cd ~/projects/pr-launcher
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-mkdir -p ~/bin
-ln -s "$PWD/.venv/bin/review-prs" ~/bin/review-prs
-export PATH="$HOME/bin:$PATH"
+cd ~/projects/review-prs
+mise trust      # first time only
+mise run build
 ```
 
-Skip the symlink step if it already exists. Add the PATH line to `~/.zshrc` if needed. The editable install picks up code edits without reinstalling; only changes to `pyproject.toml` need a reinstall. There are no third-party Python runtime dependencies.
+This creates `.venv` (or recreates it if it was made at another path), installs the package into it in editable mode, and links `~/bin/review-prs` to it. Make sure `~/bin` is on your `PATH`. The editable install picks up code edits without reinstalling; only changes to `pyproject.toml` need a reinstall. There are no third-party Python runtime dependencies.
 
 If Claude is not signed in, run `claude auth login` yourself using your Claude account. Your successful manual `claude --cloud` launch already demonstrated the required cloud access.
 
@@ -123,7 +120,7 @@ The launcher prints `LAUNCH` immediately and returns as soon as Claude emits a c
 ## Development checks
 
 ```sh
-cd ~/projects/pr-launcher
+cd ~/projects/review-prs
 python3 -m unittest discover -s tests -v
 python3 -m review_prs.cli --dry-run
 ```
