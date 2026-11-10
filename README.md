@@ -9,7 +9,7 @@ review-prs
 
 The command extracts PRs, finds the matching existing checkout under `~/fossa`, and runs `claude --cloud "Review <canonical PR URL>. …"` from that directory. It records and prints the created cloud session's URL.
 
-**No extra clones, branch switching, routines, API tokens, browser automation, or extensions.** It uses your existing Claude CLI account. Both `~/fossa/sparkle` and `~/fossa/fossa-action` work automatically when their `origin` matches the PR repository.
+**No extra clones, branch switching, routines, API tokens, browser automation, or extensions.** It uses your existing Claude CLI account, plus your GitHub CLI login for `--inbox`. Both `~/fossa/sparkle` and `~/fossa/fossa-action` work automatically when their `origin` matches the PR repository.
 
 ## Install
 
@@ -20,31 +20,34 @@ For a fresh installation:
 ```sh
 cd ~/projects/pr-launcher
 python3 -m venv .venv
-.venv/bin/python -m pip install .
+.venv/bin/python -m pip install -e .
 mkdir -p ~/bin
 ln -s "$PWD/.venv/bin/review-prs" ~/bin/review-prs
 export PATH="$HOME/bin:$PATH"
 ```
 
-Skip the symlink step if it already exists. Add the PATH line to `~/.zshrc` if needed. After edits, reinstall with `.venv/bin/python -m pip install .`. There are no third-party Python runtime dependencies.
+Skip the symlink step if it already exists. Add the PATH line to `~/.zshrc` if needed. The editable install picks up code edits without reinstalling; only changes to `pyproject.toml` need a reinstall. There are no third-party Python runtime dependencies.
 
 If Claude is not signed in, run `claude auth login` yourself using your Claude account. Your successful manual `claude --cloud` launch already demonstrated the required cloud access.
 
 ## Usage
 
-Clipboard input is the default. `--clipboard` remains an optional alias; use `--file` or `--stdin` to select another source.
+Clipboard input is the default. `--clipboard` remains an optional alias; use `--file`, `--stdin` or `--inbox` to select another source.
 
 ```sh
 review-prs                 # Launch each new PR
 review-prs --dry-run       # Read-only preview; no Claude invocation
 review-prs --force         # Allow repeats of successful PRs
-review-prs --open          # Also open resulting links
+review-prs --open          # Then open each PR and its review in a new Firefox window
+review-prs --inbox         # PRs in the "Needs your review" section of github.com/pulls/inbox
 review-prs --file reminder.txt --dry-run
 review-prs --file reminder.html --dry-run
 printf '%s\n' 'https://github.com/fossas/sparkle/pull/1490/files#diff-example' | review-prs --stdin --dry-run
 ```
 
-Dry runs display PR URLs, checkout paths, current branches and exact intended commands. They do not create history/configuration, make network requests, launch Claude, open a browser, or replace your clipboard.
+`--inbox` runs `gh api search/issues` with `is:pr is:open archived:false user-review-requested:@me`, so it needs `gh auth login`. It includes PRs that request your review by name, not ones requested only from your teams.
+
+Dry runs display PR URLs, checkout paths, current branches and exact intended commands. They do not create history/configuration, make network requests (except the GitHub search for `--inbox`), launch Claude, open a browser, or replace your clipboard.
 
 Each PR gets its own cloud session. Launch requests are sequential; cloud reviews then run independently. Exit codes are 0 for success/empty input, 1 for any failure or uncertain result, and 130 for interruption.
 

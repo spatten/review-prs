@@ -67,6 +67,22 @@ def clipboard():
     return json.loads(p.stdout)
 
 
+# Matches the "Needs your review" section of github.com/pulls/inbox: PRs that
+# request your review by name. review-requested:@me would add team requests too.
+INBOX_QUERY = 'is:pr is:open archived:false user-review-requested:@me'
+
+
+def inbox():
+    try:
+        p = run(['gh', 'api', '-X', 'GET', 'search/issues', '-f', f'q={INBOX_QUERY}',
+                 '-f', 'per_page=100', '--jq', '.items[].html_url'])
+    except FileNotFoundError:
+        raise Error('--inbox requires the GitHub CLI (gh); install it and run gh auth login')
+    if p.returncode:
+        raise Error('Cannot read GitHub inbox (try gh auth login): ' + p.stderr.strip())
+    return [p.stdout]
+
+
 def config(state):
     path = state / 'config.json'
     data = json.loads(path.read_text()) if path.exists() else {'repositories': {}}
@@ -210,18 +226,27 @@ def launch(path, pr):
     return ('failed' if rejected else 'uncertain'), None, detail
 
 
-def open_session(url):
+def open_window(pairs):
+    """Open one new Firefox window with tabs ordered PR, session, PR, session, ...
+
+    open -n starts a second Firefox process, which hands the URLs to the running
+    browser and exits; plain open -a drops --args when Firefox is already running.
+    Firefox opens several bare URLs together in one new window. Adding --new-window
+    splits them: it applies only to the first URL, giving two windows.
+    """
+    urls = [url for pair in pairs for url in pair]
     try:
-        result = run(['/usr/bin/open', url])
+        result = run(['/usr/bin/open', '-na', 'Firefox', '--args', *urls])
         if result.returncode:
-            print('Could not open browser; use the printed session link.')
+            print('Could not open Firefox; use the printed links. ' + result.stderr.strip())
     except (OSError, subprocess.SubprocessError):
-        print('Could not open browser; use the printed session link.')
+        print('Could not open Firefox; use the printed links.')
 
 
 def process(prs, repos, history, dry=False, force=False, opener=False, state=None):
     state = state or STATE
     failures = 0
+    opened = []
     for pr in prs:
         records = history.records(pr)
         uncertain = next((r for r in records if r['status'] in ('pending', 'uncertain')), None)
@@ -234,8 +259,7 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
         success = next((r for r in records if r['status'] == 'success'), None)
         if success and not force:
             print(f'SKIP {pr} → {success["session"]}')
-            if opener and not dry:
-                open_session(success['session'])
+            opened.append((pr, success['session']))
             continue
         repo = '/'.join(urlsplit(pr).path.split('/')[1:3])
         try:
@@ -253,11 +277,12 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
         history.finish(id, status, url, detail)
         if status == 'success':
             print(f'OK {pr} → {url}', flush=True)
-            if opener:
-                open_session(url)
+            opened.append((pr, url))
         else:
             failures += 1
             print(f'{status.upper()} {pr} — {detail}' + ('; check claude.ai/code before --resolve' if status == 'uncertain' else ''))
+    if opener and opened and not dry:
+        open_window(opened)
     return 1 if failures else 0
 
 
@@ -267,6 +292,7 @@ def main(argv=None):
     source.add_argument('--clipboard', action='store_true', help='read macOS clipboard (default)')
     source.add_argument('--file', type=Path, help='UTF-8 text or HTML file')
     source.add_argument('--stdin', action='store_true')
+    source.add_argument('--inbox', action='store_true', help='PRs that request your review by name, via gh')
     source.add_argument('--configure', metavar='OWNER/REPO', help='map a repository outside ~/fossa; never launches')
     source.add_argument('--resolve', metavar='PR_URL', help='resolve uncertain attempts after checking the cloud UI')
     p.add_argument('--checkout', type=Path, help='existing checkout path for --configure')
@@ -275,7 +301,7 @@ def main(argv=None):
     resolution.add_argument('--not-created', action='store_true')
     p.add_argument('--dry-run', action='store_true')
     p.add_argument('--force', action='store_true')
-    p.add_argument('--open', action='store_true', dest='opener')
+    p.add_argument('--open', action='store_true', dest='opener', help='open each PR and its review in one new Firefox window')
     args = p.parse_args(argv)
     if (args.configure or args.resolve) and (args.dry_run or args.force or args.opener):
         p.error('setup/resolve cannot be combined with launch flags')
@@ -309,10 +335,12 @@ def main(argv=None):
                 history.finish(r['id'], 'success' if url else 'failed', url, 'Manually resolved')
             print(f'Resolved {pr}: {url or "not created; safe to retry"}')
             return 0
-        texts = [args.file.read_text()] if args.file else [sys.stdin.read()] if args.stdin else clipboard()
+        texts = ([args.file.read_text()] if args.file else [sys.stdin.read()] if args.stdin
+                 else inbox() if args.inbox else clipboard())
         prs = extract(*texts)
         if not prs:
-            print('The copied content contains no usable PR links. Copy the links or linked text again.')
+            print('No PRs are waiting for your review.' if args.inbox else
+                  'The copied content contains no usable PR links. Copy the links or linked text again.')
             return 0
         return process(prs, config(state), history, args.dry_run, args.force, args.opener, state=state)
     except (Error, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, EOFError) as e:

@@ -53,6 +53,19 @@ class Bookkeeping(unittest.TestCase):
         self.history.close()
         self.temp.cleanup()
 
+    def test_open_one_window_with_pr_then_session_tabs(self):
+        S2 = 'https://claude.ai/code/session_second'
+        self.history.finish(self.history.start(P+'1'), 'success', S)  # already reviewed: SKIP still opens it
+        with patch.object(c, 'launch', side_effect=[('failed', None, 'x'), ('success', S2, None)]), patch.object(c, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
+            c.process([P+'1', P+'2', P+'3'], self.repos, self.history, opener=True)
+        run.assert_called_once_with(['/usr/bin/open', '-na', 'Firefox', '--args', P+'1', S, P+'3', S2])
+
+    def test_open_skipped_on_dry_run(self):
+        self.history.finish(self.history.start(P+'1'), 'success', S)
+        with patch.object(c, 'run') as run:
+            c.process([P+'1'], self.repos, self.history, dry=True, opener=True)
+        run.assert_not_called()
+
     def test_partial_results_skip_force_and_pending_guard(self):
         with patch.object(c, 'launch', side_effect=[('success', S, None), ('uncertain', None, 'lost'), ('failed', None, 'exec failed')]) as launch:
             self.assertEqual(c.process([P+'1', P+'2', P+'3'], self.repos, self.history), 1)
@@ -109,6 +122,29 @@ class Command(unittest.TestCase):
         with patch.object(c.sys, 'platform', 'darwin'), patch.object(c, 'run', return_value=result) as run:
             self.assertEqual(c.extract(*c.clipboard()), [P+'7'])
             self.assertEqual(run.call_args.args[0][:3], ['/usr/bin/osascript', '-l', 'JavaScript'])
+
+    def test_inbox_queries_direct_review_requests(self):
+        result = subprocess.CompletedProcess([], 0, f'{P}1689\n{P}1686\n', '')
+        with patch.object(c, 'run', return_value=result) as run:
+            self.assertEqual(c.extract(*c.inbox()), [P+'1689', P+'1686'])
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[:5], ['gh', 'api', '-X', 'GET', 'search/issues'])
+            self.assertIn('q=is:pr is:open archived:false user-review-requested:@me', argv)
+
+    def test_inbox_gh_failure_is_an_error(self):
+        result = subprocess.CompletedProcess([], 1, '', 'HTTP 401: Bad credentials')
+        with patch.object(c, 'run', return_value=result):
+            with self.assertRaisesRegex(c.Error, 'gh auth login.*Bad credentials'):
+                c.inbox()
+        with patch.object(c, 'run', side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(c.Error, 'requires the GitHub CLI'):
+                c.inbox()
+
+    def test_empty_inbox_succeeds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(c, 'STATE', Path(directory)), patch.object(c, 'inbox', return_value=['']), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(c.main(['--inbox', '--dry-run']), 0)
+                self.assertIn('No PRs are waiting', out.getvalue())
 
     def test_cli_dry_run_creates_no_state(self):
         with tempfile.TemporaryDirectory() as directory:
