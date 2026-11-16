@@ -1,13 +1,11 @@
-"""Small, dependency-free PR launcher. No clipboard text becomes executable code."""
+"""Start a Claude cloud review for each GitHub PR link in the clipboard or another source."""
 import argparse
 import fcntl
 import html
 import json
-import os
 from pathlib import Path
 import re
 import shlex
-import tempfile
 from .terminal import run_terminal
 import sqlite3
 import subprocess
@@ -18,7 +16,6 @@ from urllib.parse import urlsplit
 STATE = Path.home() / 'Library/Application Support/review-prs'
 CHECKOUTS = Path.home() / 'fossa'
 URL = re.compile(r'https?://[^\s<>"\'`|\\()\[\]{}]+', re.I)
-REPO = re.compile(r'[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+\Z')
 PR_PATH = re.compile(r'/([A-Za-z0-9][A-Za-z0-9-]*)/([A-Za-z0-9_.-]+)/pull/([0-9]+)(?=/|$)')
 SESSION = re.compile(r'https://claude\.ai/code/((?:session_|cse_)[A-Za-z0-9_-]+)(?=[?\s\x1b"<>\')]|$)')
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
@@ -72,25 +69,17 @@ def clipboard():
 INBOX_QUERY = 'is:pr is:open archived:false user-review-requested:@me'
 
 
-def inbox():
+def github():
     try:
         p = run(['gh', 'api', '-X', 'GET', 'search/issues', '-f', f'q={INBOX_QUERY}',
                  '-f', 'per_page=100', '--jq', '.items[].html_url'])
     except FileNotFoundError:
-        raise Error('--inbox requires the GitHub CLI (gh); install it and run gh auth login')
+        raise Error('--github requires the GitHub CLI (gh); install it and run gh auth login')
     if p.returncode:
         raise Error('Cannot read GitHub inbox (try gh auth login): ' + p.stderr.strip())
     return [p.stdout]
 
 
-def config(state):
-    path = state / 'config.json'
-    data = json.loads(path.read_text()) if path.exists() else {'repositories': {}}
-    if not isinstance(data, dict) or not isinstance(data.get('repositories'), dict):
-        raise Error('config.json must contain a repositories object')
-    if any(not isinstance(k, str) or (not REPO.fullmatch(k) or k.split('/')[1] in ('.', '..')) for k in data['repositories']):
-        raise Error('repository keys must be owner/repo')
-    return {k.lower(): v for k, v in data['repositories'].items()}
 
 
 def git(path, *args):
@@ -100,47 +89,24 @@ def git(path, *args):
     return result.stdout.strip()
 
 
-def validate(repo, entry=None):
-    if entry is not None and not isinstance(entry, str):
-        raise Error(f'old routine configuration; replace with: review-prs --configure {repo} --checkout <path>')
-    path = Path(entry).expanduser().resolve() if entry is not None else (CHECKOUTS / repo.split('/')[1]).resolve()
+def validate(repo, path):
+    path = path.resolve()
     if not path.is_dir():
-        raise Error(f'no checkout at {path}; use: review-prs --configure {repo} --checkout <path>')
+        raise Error(f'no checkout at {path}; clone {repo} there')
     root = Path(git(path, 'rev-parse', '--show-toplevel')).resolve()
     if not root.samefile(path):
-        raise Error('mapping must point to the root of a Git checkout')
+        raise Error(f'{path} is not the root of a Git checkout')
     path = root
     origin = git(path, 'remote', 'get-url', 'origin')
     remote = re.fullmatch(r'(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)([^/]+/[^/]+?)(?:\.git)?/?', origin, re.I)
     if not remote or remote[1].lower() != repo:
-        raise Error(f'origin does not match {repo}; use: review-prs --configure {repo} --checkout <path>')
+        raise Error(f'origin of {path} does not match {repo}')
     branch = git(path, 'rev-parse', '--abbrev-ref', 'HEAD')
     return path, branch if branch != 'HEAD' else 'detached HEAD'
 
 
-def private_write(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, name = tempfile.mkstemp(dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w') as stream:
-            stream.write(text)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, path)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
 
 
-def configure(state, repo, checkout):
-    repo = repo.lower()
-    if not REPO.fullmatch(repo) or repo.split('/')[1] in ('.', '..'):
-        raise Error('expected owner/repo')
-    path, branch = validate(repo, str(checkout))
-    repos = config(state)
-    repos[repo] = str(path)
-    private_write(state / 'config.json', json.dumps({'repositories': repos}, indent=2) + '\n')
-    print(f'Mapped {repo} → {path} [{branch}]')
 
 
 class History:
@@ -243,19 +209,12 @@ def open_window(pairs):
         print('Could not open Firefox; use the printed links.')
 
 
-def process(prs, repos, history, dry=False, force=False, opener=False, state=None):
+def process(prs, history, dry=False, force=False, opener=False, state=None):
     state = state or STATE
     failures = 0
     opened = []
     for pr in prs:
         records = history.records(pr)
-        uncertain = next((r for r in records if r['status'] in ('pending', 'uncertain')), None)
-        if uncertain:
-            print(f'UNCERTAIN {pr} — check claude.ai/code, then use --resolve; --force does not override this')
-            if uncertain['detail']:
-                print('  Previous attempt: ' + uncertain['detail'])
-            failures += 1
-            continue
         success = next((r for r in records if r['status'] == 'success'), None)
         if success and not force:
             print(f'SKIP {pr} → {success["session"]}')
@@ -263,7 +222,7 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
             continue
         repo = '/'.join(urlsplit(pr).path.split('/')[1:3])
         try:
-            path, branch = validate(repo, repos.get(repo))
+            path, branch = validate(repo, CHECKOUTS / repo.split('/')[1])
             if dry:
                 print(f'DRY {pr}\n  {repo} → {path} [{branch}]\n  {shlex.join(["claude", "--cloud", prompt(pr)])}')
                 continue
@@ -280,35 +239,23 @@ def process(prs, repos, history, dry=False, force=False, opener=False, state=Non
             opened.append((pr, url))
         else:
             failures += 1
-            print(f'{status.upper()} {pr} — {detail}' + ('; check claude.ai/code before --resolve' if status == 'uncertain' else ''))
+            print(f'{status.upper()} {pr} — {detail}' + ('; the next run will launch it again' if status == 'uncertain' else ''))
     if opener and opened and not dry:
         open_window(opened)
     return 1 if failures else 0
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, epilog='Each review starts with this prompt: ' + prompt('<PR URL>'))
     source = p.add_mutually_exclusive_group()
     source.add_argument('--clipboard', action='store_true', help='read macOS clipboard (default)')
     source.add_argument('--file', type=Path, help='UTF-8 text or HTML file')
-    source.add_argument('--stdin', action='store_true')
-    source.add_argument('--inbox', action='store_true', help='PRs that request your review by name, via gh')
-    source.add_argument('--configure', metavar='OWNER/REPO', help='map a repository outside ~/fossa; never launches')
-    source.add_argument('--resolve', metavar='PR_URL', help='resolve uncertain attempts after checking the cloud UI')
-    p.add_argument('--checkout', type=Path, help='existing checkout path for --configure')
-    resolution = p.add_mutually_exclusive_group()
-    resolution.add_argument('--session-url')
-    resolution.add_argument('--not-created', action='store_true')
-    p.add_argument('--dry-run', action='store_true')
-    p.add_argument('--force', action='store_true')
+    source.add_argument('--stdin', action='store_true', help='read PR links from standard input')
+    source.add_argument('--github', action='store_true', help='PRs that request your review by name, via gh')
+    p.add_argument('--dry-run', action='store_true', help='show what would be launched without launching or recording anything')
+    p.add_argument('--force', action='store_true', help='launch PRs again even if an earlier launch succeeded')
     p.add_argument('--open', action='store_true', dest='opener', help='open each PR and its review in one new Firefox window')
     args = p.parse_args(argv)
-    if (args.configure or args.resolve) and (args.dry_run or args.force or args.opener):
-        p.error('setup/resolve cannot be combined with launch flags')
-    if bool(args.resolve) != bool(args.session_url or args.not_created):
-        p.error('--resolve requires --session-url or --not-created, and vice versa')
-    if bool(args.configure) != bool(args.checkout):
-        p.error('--configure requires --checkout, and vice versa')
     state = STATE.resolve()
     lock = history = None
     try:
@@ -319,35 +266,20 @@ def main(argv=None):
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise Error('another review-prs command is running')
-        if args.configure:
-            configure(state, args.configure, args.checkout)
-            return 0
         history = History(state, readonly=args.dry_run)
-        if args.resolve:
-            pr = canonical(args.resolve)
-            url = session_url(args.session_url or '')
-            if not pr or (args.session_url and not url):
-                raise Error('provide a valid PR URL and Claude session URL')
-            records = [r for r in history.records(pr) if r['status'] in ('pending', 'uncertain')]
-            if not records:
-                raise Error('no uncertain attempt found for this PR')
-            for r in records:
-                history.finish(r['id'], 'success' if url else 'failed', url, 'Manually resolved')
-            print(f'Resolved {pr}: {url or "not created; safe to retry"}')
-            return 0
         texts = ([args.file.read_text()] if args.file else [sys.stdin.read()] if args.stdin
-                 else inbox() if args.inbox else clipboard())
+                 else github() if args.github else clipboard())
         prs = extract(*texts)
         if not prs:
-            print('No PRs are waiting for your review.' if args.inbox else
+            print('No PRs are waiting for your review.' if args.github else
                   'The copied content contains no usable PR links. Copy the links or linked text again.')
             return 0
-        return process(prs, config(state), history, args.dry_run, args.force, args.opener, state=state)
+        return process(prs, history, args.dry_run, args.force, args.opener, state=state)
     except (Error, OSError, ValueError, sqlite3.Error, subprocess.SubprocessError, EOFError) as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print('\nInterrupted. Any pending launch is uncertain; check claude.ai/code before retrying.', file=sys.stderr)
+        print('\nInterrupted. The next run will launch any PR that did not finish.', file=sys.stderr)
         return 130
     finally:
         if history:

@@ -84,7 +84,7 @@ class Checkout(unittest.TestCase):
         (self.repo / 'work.txt').write_text('uncommitted work')
         before = self.git('status', '--porcelain')
         with patch.object(c, 'CHECKOUTS', self.root):
-            self.assertEqual(c.validate('fossas/sparkle'), (self.repo, 'feature'))
+            self.assertEqual(c.validate('fossas/sparkle', self.repo), (self.repo, 'feature'))
         self.assertEqual(self.git('status', '--porcelain'), before)
         self.assertEqual(self.git('branch', '--show-current'), 'feature')
         self.assertEqual((self.repo / 'work.txt').read_text(), 'uncommitted work')
@@ -94,37 +94,31 @@ class Checkout(unittest.TestCase):
         if not alias.exists():
             self.skipTest('requires a case-insensitive filesystem')
         self.assertTrue(alias.samefile(self.repo))
-        self.assertEqual(c.validate('fossas/sparkle', str(alias)), (self.repo, 'feature'))
+        self.assertEqual(c.validate('fossas/sparkle', alias), (self.repo, 'feature'))
 
     def test_subdirectory_is_not_checkout_root(self):
         child = self.repo / 'nested'
         child.mkdir()
         with self.assertRaisesRegex(c.Error, 'root of a Git checkout'):
-            c.validate('fossas/sparkle', str(child))
+            c.validate('fossas/sparkle', child)
 
     def test_wrong_owner_not_accepted_by_folder_name(self):
-        with patch.object(c, 'CHECKOUTS', self.root), self.assertRaisesRegex(c.Error, 'origin does not match'):
-            c.validate('other/sparkle')
-
-    def test_explicit_mapping_and_configure(self):
-        state = self.root/'state'
-        with contextlib.redirect_stdout(io.StringIO()):
-            c.configure(state, 'Fossas/Sparkle', self.repo)
-        self.assertEqual(c.config(state)['fossas/sparkle'], str(self.repo))
+        with self.assertRaisesRegex(c.Error, 'does not match'):
+            c.validate('other/sparkle', self.repo)
 
     def test_linked_worktree_supported(self):
         worktree = self.root/'linked'
         self.git('worktree', 'add', '-b', 'another-feature', str(worktree))
-        self.assertEqual(c.validate('fossas/sparkle', str(worktree)), (worktree, 'another-feature'))
+        self.assertEqual(c.validate('fossas/sparkle', worktree), (worktree, 'another-feature'))
 
     def test_lookalike_remote_rejected(self):
         self.git('remote', 'set-url', 'origin', 'https://github.com.evil/fossas/sparkle.git')
-        with self.assertRaisesRegex(c.Error, 'origin does not match'):
-            c.validate('fossas/sparkle', str(self.repo))
+        with self.assertRaisesRegex(c.Error, 'does not match'):
+            c.validate('fossas/sparkle', self.repo)
 
-    def test_missing_directory_and_old_routine_config(self):
-        for entry in (str(self.root/'missing'), {'routine_url': 'unused'}):
-            with self.assertRaises(c.Error): c.validate('fossas/sparkle', entry)
+    def test_missing_directory(self):
+        with self.assertRaisesRegex(c.Error, 'no checkout'):
+            c.validate('fossas/sparkle', self.root/'missing')
 
     def test_dry_run_exercises_real_git_but_never_claude(self):
         state = self.root/'absent'

@@ -46,7 +46,6 @@ class Bookkeeping(unittest.TestCase):
         self.context = contextlib.ExitStack()
         self.context.enter_context(contextlib.redirect_stdout(self.output))
         self.context.enter_context(patch.object(c, 'validate', return_value=(Path('/existing'), 'main')))
-        self.repos = {'fossas/sparkle': '/existing'}
 
     def tearDown(self):
         self.context.close()
@@ -57,57 +56,51 @@ class Bookkeeping(unittest.TestCase):
         S2 = 'https://claude.ai/code/session_second'
         self.history.finish(self.history.start(P+'1'), 'success', S)  # already reviewed: SKIP still opens it
         with patch.object(c, 'launch', side_effect=[('failed', None, 'x'), ('success', S2, None)]), patch.object(c, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
-            c.process([P+'1', P+'2', P+'3'], self.repos, self.history, opener=True)
+            c.process([P+'1', P+'2', P+'3'], self.history, opener=True)
         run.assert_called_once_with(['/usr/bin/open', '-na', 'Firefox', '--args', P+'1', S, P+'3', S2])
 
     def test_open_skipped_on_dry_run(self):
         self.history.finish(self.history.start(P+'1'), 'success', S)
         with patch.object(c, 'run') as run:
-            c.process([P+'1'], self.repos, self.history, dry=True, opener=True)
+            c.process([P+'1'], self.history, dry=True, opener=True)
         run.assert_not_called()
 
-    def test_partial_results_skip_force_and_pending_guard(self):
+    def test_partial_results_skip_and_force(self):
         with patch.object(c, 'launch', side_effect=[('success', S, None), ('uncertain', None, 'lost'), ('failed', None, 'exec failed')]) as launch:
-            self.assertEqual(c.process([P+'1', P+'2', P+'3'], self.repos, self.history), 1)
+            self.assertEqual(c.process([P+'1', P+'2', P+'3'], self.history), 1)
             self.assertEqual(launch.call_count, 3)
         self.history.close()
         self.history = c.History(self.state)
         with patch.object(c, 'launch', return_value=('success', S, None)) as launch:
-            c.process([P+'1', P+'2', P+'3'], self.repos, self.history)
-            self.assertEqual(launch.call_count, 1)
-            c.process([P+'1', P+'2'], self.repos, self.history, force=True)
+            c.process([P+'1', P+'2', P+'3'], self.history)
             self.assertEqual(launch.call_count, 2)
+            c.process([P+'1', P+'2'], self.history, force=True)
+            self.assertEqual(launch.call_count, 4)
         self.assertEqual(len(self.history.records(P+'1')), 2)
         self.assertIn(S, self.output.getvalue())
         self.assertTrue(self.history.records(P+'1')[0]['timestamp'])
 
-    def test_interruption_remains_pending(self):
+    def test_interrupted_launch_is_retried(self):
         with patch.object(c, 'launch', side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
-                c.process([P+'1'], self.repos, self.history)
+                c.process([P+'1'], self.history)
         self.assertEqual(self.history.records(P+'1')[0]['status'], 'pending')
-        with patch.object(c, 'launch') as launch:
-            c.process([P+'1'], self.repos, self.history, force=True)
-            launch.assert_not_called()
+        with patch.object(c, 'launch', return_value=('success', S, None)) as launch:
+            c.process([P+'1'], self.history)
+            launch.assert_called_once()
 
     def test_dry_run_has_no_launch_or_write(self):
         with patch.object(c, 'launch') as launch:
-            c.process([P+'1'], self.repos, self.history, dry=True)
+            c.process([P+'1'], self.history, dry=True)
             launch.assert_not_called()
         self.assertEqual(self.history.records(P+'1'), [])
         self.assertIn('Review '+P+'1', self.output.getvalue())
 
     def test_missing_mapping_does_not_block_other_repos(self):
-        with patch.object(c, 'validate', side_effect=[c.Error('use --configure other/repo'), (Path('/existing'), 'feature')]), patch.object(c, 'launch', return_value=('success', S, None)) as launch:
-            c.process(['https://github.com/other/repo/pull/1', P+'1'], self.repos, self.history)
+        with patch.object(c, 'validate', side_effect=[c.Error('no checkout at /fossa/repo'), (Path('/existing'), 'feature')]), patch.object(c, 'launch', return_value=('success', S, None)) as launch:
+            c.process(['https://github.com/other/repo/pull/1', P+'1'], self.history)
             self.assertEqual(launch.call_count, 1)
-        self.assertIn('--configure other/repo', self.output.getvalue())
-
-    def test_resolution_then_retry(self):
-        self.history.start(P+'1')
-        with patch.object(c, 'STATE', self.state):
-            self.assertEqual(c.main(['--resolve', P+'1', '--not-created']), 0)
-        self.assertEqual(self.history.records(P+'1')[0]['status'], 'failed')
+        self.assertIn('no checkout at /fossa/repo', self.output.getvalue())
 
     def test_readonly_missing_does_not_create_state(self):
         path = self.state / 'absent'
@@ -123,27 +116,27 @@ class Command(unittest.TestCase):
             self.assertEqual(c.extract(*c.clipboard()), [P+'7'])
             self.assertEqual(run.call_args.args[0][:3], ['/usr/bin/osascript', '-l', 'JavaScript'])
 
-    def test_inbox_queries_direct_review_requests(self):
+    def test_github_queries_direct_review_requests(self):
         result = subprocess.CompletedProcess([], 0, f'{P}1689\n{P}1686\n', '')
         with patch.object(c, 'run', return_value=result) as run:
-            self.assertEqual(c.extract(*c.inbox()), [P+'1689', P+'1686'])
+            self.assertEqual(c.extract(*c.github()), [P+'1689', P+'1686'])
             argv = run.call_args.args[0]
             self.assertEqual(argv[:5], ['gh', 'api', '-X', 'GET', 'search/issues'])
             self.assertIn('q=is:pr is:open archived:false user-review-requested:@me', argv)
 
-    def test_inbox_gh_failure_is_an_error(self):
+    def test_github_gh_failure_is_an_error(self):
         result = subprocess.CompletedProcess([], 1, '', 'HTTP 401: Bad credentials')
         with patch.object(c, 'run', return_value=result):
             with self.assertRaisesRegex(c.Error, 'gh auth login.*Bad credentials'):
-                c.inbox()
+                c.github()
         with patch.object(c, 'run', side_effect=FileNotFoundError):
             with self.assertRaisesRegex(c.Error, 'requires the GitHub CLI'):
-                c.inbox()
+                c.github()
 
-    def test_empty_inbox_succeeds(self):
+    def test_empty_github_succeeds(self):
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(c, 'STATE', Path(directory)), patch.object(c, 'inbox', return_value=['']), contextlib.redirect_stdout(io.StringIO()) as out:
-                self.assertEqual(c.main(['--inbox', '--dry-run']), 0)
+            with patch.object(c, 'STATE', Path(directory)), patch.object(c, 'github', return_value=['']), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(c.main(['--github', '--dry-run']), 0)
                 self.assertIn('No PRs are waiting', out.getvalue())
 
     def test_cli_dry_run_creates_no_state(self):
@@ -154,17 +147,6 @@ class Command(unittest.TestCase):
                 self.assertIn('no checkout', out.getvalue())
                 self.assertFalse(state.exists())
 
-    def test_session_resolution_is_saved(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            h = c.History(state)
-            h.start(P+'1')
-            h.close()
-            with patch.object(c, 'STATE', state), contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(c.main(['--resolve', P+'1', '--session-url', S]), 0)
-            h = c.History(state, readonly=True)
-            self.assertEqual(h.records(P+'1')[0]['session'], S)
-            h.close()
 
 
 
