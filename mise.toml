@@ -13,3 +13,7 @@ mkdir -p ~/bin
 ln -sfn "$PWD/.venv/bin/review-prs" ~/bin/review-prs
 echo "Installed: ~/bin/review-prs -> $PWD/.venv/bin/review-prs"
 '''
+
+[tasks.test]
+description = "Run the unit tests (the terminal tests need real pseudo-terminals, so they fail in a sandbox)"
+run = "python3 -m unittest tests/test_*.py"
