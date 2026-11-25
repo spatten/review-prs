@@ -163,7 +163,12 @@ def diagnostics(output):
 
 
 def prompt(pr):
-    return (f'Review {pr}. Report your findings only in this session. '
+    return (f'Review {pr}. '
+            'This PR may be one of a stack. Before you report, find the PRs above it: open PRs whose base is '
+            "this PR's head branch, then the PRs based on those, up to the top. Check each finding against the "
+            'top of the stack as well as this PR. If a later PR fixes a finding, move it to a short '
+            '"Fixed later in the stack" list that names the PR that fixes it. '
+            'Report your findings only in this session. '
             'Never post comments or reviews to the PR, and do not offer to post them.')
 
 

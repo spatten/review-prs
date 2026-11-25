@@ -60,7 +60,7 @@ The launcher uses the existing checkout's **current branch**, including a featur
 
 Claude's normal cloud path clones the GitHub remote at that branch. If the Claude GitHub App is absent, Claude may instead bundle local repository data, including tracked uncommitted changes. This is the same behavior as invoking `claude --cloud` yourself. A local-only branch or detached HEAD may not work through every cloud launch path. See [Claude's cloud launch documentation](https://code.claude.com/docs/en/claude-code-on-the-web#from-terminal-to-cloud).
 
-The exact prompt is `Review <URL>. Report your findings only in this session. Never post comments or reviews to the PR, and do not offer to post them.` The launcher does not separately publish comments, submit GitHub reviews, or modify PRs. The cloud agent still follows its own permissions, skills and repository instructions; this tool does not restrict the cloud agent's actions. Local Claude permission-rule warnings do not prevent recording a returned session URL.
+The exact prompt is printed at the end of `review-prs --help`. It tells the reviewer to check its findings against the later PRs in a stack, to report only in the session, and never to post to the PR. The launcher does not separately publish comments, submit GitHub reviews, or modify PRs. The cloud agent still follows its own permissions, skills and repository instructions; this tool does not restrict the cloud agent's actions. Local Claude permission-rule warnings do not prevent recording a returned session URL.
 
 Model, effort and environment are left to Claude's defaults/settings. The tool exposes no overrides because reliable propagation through this launch interface has not been established. No extra cloud messages are sent.
 
